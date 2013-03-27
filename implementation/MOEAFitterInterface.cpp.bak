@@ -1,0 +1,262 @@
+/*
+Revision of last commit: $Rev: 222 $
+Author of last commit: $Author: werner $
+Date of last commit: $Date: 2007-10-04 14:03:41 +0900 (Thu, 04 Oct 2007) $
+*/
+
+#include "../MOEAFitterInterface.h"
+
+
+
+
+FitterResults MOEAFitterInterface::runFitter(ModelTuningParameters * modelParameters) 
+{
+	this->numberOfOffspring =  toInt(fixedParams["NumberOfOffspring"]);
+	this->populationSize =  toInt(fixedParams["PopulationSize"]);
+	this->mutationStep =  toDouble(fixedParams["MutationStep"]);
+	this->maxGenerations =  toInt(fixedParams["MaxGenerations"]);
+
+	showMessage("Running MOEA fitter\n",5,fixedParams);
+
+	vector< ModelTuningParameters > runQueue;
+	vector<int> runQueueIds;
+
+	MOEAErrorValueCalculator* calculator = dynamic_cast<MOEAErrorValueCalculator*>(this->errorValue);
+	if (!calculator)
+	{
+		crash(__FILE__, "MOEAFitterInterface can only be used with the MOEAErrorValueCalculator, sorry");
+	}
+
+
+	cout << "HERE" << endl;
+	/* Initialize population to random (hopefully uniformly selected) values
+	 */
+	for (unsigned i=0;i < this->populationSize; i++)
+	{
+		individual p(modelParameters->getLength());
+		for (int k =0; k < modelParameters->getLength(); k++)
+		{
+			p.paramValues.at(k) = modelParameters->getLowerBound(k) + this->mtRand.rand(modelParameters->getUpperBound(k) - modelParameters->getLowerBound(k));
+		}
+
+		this->population.push_back(p);
+	}
+	
+	int numberOfGenerations =0;
+	for (;;)
+	{
+		runQueue.clear();
+		runQueueIds.clear();
+		for (unsigned j =0; j < this->population.size(); j++)
+		{
+			if (!this->population.at(j).evaluated)
+			{
+				ModelTuningParameters mtp;
+				mtp.setTuningParameters(this->population.at(j).paramValues);
+				cout << "Evaluating individual #" << j << endl;
+				runQueue.push_back(mtp);
+				runQueueIds.push_back(j);
+			}
+		}
+
+		calculator->calculateParallelErrorValue(runQueue);
+
+		for (unsigned j =0; j < runQueue.size(); j++)
+		{
+			int index = runQueueIds.at(j);
+			this->population.at(index).evaluated=true;
+			this->population.at(index).errorValues.clear();
+			this->population.at(index).errorValues.insert( this->population.at(index).errorValues.begin(), runQueue.at(j).getErrorValues().begin(), runQueue.at(j).getErrorValues().end()); 
+			//this->population.at(index).getErrorValues() = runQueue.at(j).errorValues;
+		}
+
+		//reduce
+		this->fastNonDominatedSort(this->population, this->paretoFronts);
+
+		this->printFronts();
+
+
+		numberOfGenerations++;
+		if (numberOfGenerations >(int) this->maxGenerations)
+			break;
+
+
+		/* Select numberOfOffspring children to replace the individuals in the back fronts */
+		unsigned bestFront =0;
+		unsigned curIndex =0;
+		vector<int> eliteIndexes;
+		for (unsigned i=0; i < numberOfOffspring; i++)
+		{
+			if (curIndex >= paretoFronts.at(bestFront).size())
+			{
+				bestFront++;
+				curIndex =0;
+			}
+			if (bestFront >= paretoFronts.size())
+			{
+				cout << __FILE__<< ":Population exhausted! cannot find enough parents for children!";
+				break;
+			}
+
+			eliteIndexes.push_back(paretoFronts.at(bestFront).at(curIndex));
+			curIndex++;
+		}
+
+		/* Contaminate the population with at least 1 individual 
+		 */
+		for (unsigned i=0; i <= numberOfOffspring; i++)
+		{
+			cout << "Warning: not enough parents, using " << i <<  endl;
+			eliteIndexes.push_back(rand()%population.size());
+		}
+
+		cout <<" Eliteindexes size=" << eliteIndexes.size() <<" population size=" << population.size()<< endl;
+
+		random_shuffle(eliteIndexes.begin(), eliteIndexes.end());
+
+		for (vector<int>::iterator it= (eliteIndexes.begin()); it!= eliteIndexes.end(); it++)
+			cout <<" Elite[] ="<<*it<<endl;
+
+		int backFront = paretoFronts.size()-1;
+		for (unsigned i =0, curIndex=0; i < this->numberOfOffspring; i++)
+		{
+			if (curIndex >= this->paretoFronts.at(backFront).size())
+			{
+				backFront--;
+				curIndex =0;
+				printf("Adjusted backfront=%d\n", backFront);
+
+			}
+
+			if (backFront <0)
+			{
+				cout<<"Population exhausted !!"<<endl;
+				break;
+			}
+		
+			/* Generate */
+			printf("Back front = %d/%d, size of fronts=%d (1st:%d)\n", backFront, curIndex, paretoFronts.size(), paretoFronts.at(0).size());
+
+			cout <<" IN = ";
+			population.at(eliteIndexes[i]).printCoordsOn(cout);
+			cout << endl;
+
+			cout <<" IN = ";
+			population.at(eliteIndexes[i+1]).printCoordsOn(cout);
+			cout << endl;
+
+			this->generateOffspring(*modelParameters, population.at(eliteIndexes[i]), population.at(eliteIndexes[i+1]), 
+							population.at(this->paretoFronts.at(backFront).at(curIndex)));
+			cout <<" CROSS ["<<this->paretoFronts.at(backFront).at(curIndex)<<"] = ";
+			population.at(this->paretoFronts.at(backFront).at(curIndex)).printCoordsOn(cout);
+			cout << endl;
+			curIndex++;
+		}
+
+	}
+
+	cout << "Finished evolution, fronts now: "; 
+	this->printFronts();
+
+	return FitterResults();
+}
+
+
+void MOEAFitterInterface::printFronts()
+{
+	for (unsigned i=0;  i < paretoFronts.size(); i++)
+	{
+		cout << "Front #"<<i<<":" << endl;
+		for (unsigned j =0;j < paretoFronts.at(i).size(); j++)
+		{
+			cout << " ";
+			population.at(paretoFronts.at(i).at(j)).printCoordsOn(cout);
+			cout << " ";
+			population.at(paretoFronts.at(i).at(j)).printErrorsOn(cout);
+			cout << endl;
+		}
+		cout << endl;
+	}
+	cout << endl;
+}
+
+
+
+
+void MOEAFitterInterface::generateOffspring(ModelTuningParameters& tuningParameters, individual& a, individual& b, individual& offspring)
+{
+	for (int i=0; i < tuningParameters.getLength(); i++)
+	{
+
+		double val  = (rand()%1 ? a.paramValues.at(i) : b.paramValues.at(i));
+		double dx = this->mutationStep * (this->mtRand()*2.0 - 1.0);
+		if (dx>0.0)
+			dx *= (tuningParameters.getUpperBound(i)- val);
+		else
+			dx *= (val - tuningParameters.getLowerBound(i));
+
+		offspring.paramValues.at(i) = val+dx;
+	}
+	offspring.evaluated = false;
+
+}
+
+
+
+void MOEAFitterInterface::fastNonDominatedSort(vector<individual>& population, vector<vector<int> >& fronts)
+{
+	fronts.clear();
+	int nFound;
+	fronts.clear();
+
+	vector<vector<int> > dominationSets(population.size());
+	vector<int> dominationCounts(population.size());
+
+	vector<int> tmp;
+	for (unsigned i =0; i < population.size(); i++)
+	{
+		dominationCounts.at(i) =0;
+		dominationSets.at(i).clear();
+
+		nFound =0;
+		for (unsigned k=0; k < population.size(); k++)
+			if (k!=i)
+				if (population.at(i).dominates(population.at(k))) /*solution i dominates solution k */
+					dominationSets.at(i).push_back(k);
+				else if (population.at(k).dominates(population.at(i)))
+					dominationCounts.at(i)++;
+		if (dominationCounts.at(i)==0)
+			tmp.push_back(i);
+	}
+
+	fronts.push_back(tmp);
+
+	int frontIndex=0;
+	while (fronts.at(frontIndex).size())
+	{
+		tmp.clear();
+		for (unsigned i=0; i < fronts.at(frontIndex).size(); i++)
+		{
+			int pIndex = fronts.at(frontIndex).at(i);
+			for (unsigned k =0; k < population.at(pIndex).dominationSet.size(); k++)
+			{
+				int qIndex = population.at(pIndex).dominationSet.at(k);
+				dominationCounts.at(qIndex)--;
+				if (dominationCounts.at(qIndex)==0)
+				{
+					tmp.push_back(qIndex);
+				}
+			}
+		}
+
+		if (tmp.size())
+			fronts.push_back(tmp);
+		else
+			break;
+		frontIndex++;
+	}
+}
+
+ 
+
+

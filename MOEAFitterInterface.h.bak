@@ -1,0 +1,107 @@
+/*
+Revision of last commit: $Rev: 222 $
+Author of last commit: $Author$
+Date of last commit: $Date: 2007-10-04 14:03:41 +0900 (Thu, 04 Oct 2007) $
+*/
+
+#ifndef NEUROFITTER_MOEAFITTERINTERFACE_H
+#define NEUROFITTER_MOEAFITTERINTERFACE_H
+
+#include "FitterResults.h"
+#include "FitterInterface.h"
+#include "ErrorValueCalculator.h"
+#include "FixedParamObject.h"
+#include "MOEAErrorValueCalculator.h"
+#include "MersenneTwister.h"
+
+using namespace std;
+
+
+class MOEAFitterInterface : public FitterInterface, FixedParamObject
+{
+
+	struct individual 
+	{
+		vector<double> paramValues;
+		vector<double> errorValues;	/* Error values calculated for this individual */
+		float hyperVolume;
+		int paretoFront; 	/* Pareto front number this individual was classified */
+		int index;		/* index of this individual in the population vector */
+		bool evaluated;		/* have we evaluated error values for this individual ? */
+
+		vector<int> dominationSet; 		/* the set of solutions that this solution dominates */
+		vector<int> dominationCounts;		/* number of solutions that dominate this solution */
+		individual(int chromosomeSize)
+		{
+			this->paramValues.clear();
+			for (int i=0; i < chromosomeSize; i++)
+				this->paramValues.push_back(0);
+			this->evaluated = false;
+			this->index = this->paretoFront =0;
+			this->hyperVolume =0;
+		}
+
+		bool dominates(individual& b)
+		{
+			if (!this->evaluated || !b.evaluated)
+				crash(__FILE__, "Individual not evaluated");
+			for (unsigned i =0; i < paramValues.size(); i++)
+			{
+				if (this->paramValues.at(i) < b.paramValues.at(i))
+					return true;
+			}
+			return false;
+		}
+
+		void printCoordsOn(ostream& out)
+		{
+			out << "{";
+			for (unsigned i=0; i < this->paramValues.size();  i++)
+				out << " "<< paramValues.at(i);
+			out << "}";
+		}
+
+		void printErrorsOn(ostream& out)
+		{
+			out << "{";
+			for (unsigned i=0; i < this->errorValues.size();  i++)
+				out << " "<< errorValues.at(i);
+			out << "}";
+		}
+
+
+
+
+	};
+	
+	struct paretoFront
+	{
+		vector<individual> & individuals;
+	};
+
+	void fastNonDominatedSort(vector<individual>& population, vector<vector<int> >& fronts);
+	void generateOffspring(ModelTuningParameters& tuningParameters, individual& a, individual& b, individual& offspring);
+
+	vector <individual> 	population;
+	vector <vector<int> > 	paretoFronts;
+	MTRand mtRand;
+	unsigned populationSize;
+	unsigned numberOfOffspring;
+	unsigned maxGenerations;
+	double mutationStep;
+
+	public:
+		MOEAFitterInterface(ErrorValueCalculator * fit, FixedParameters params):FitterInterface(fit), FixedParamObject(params) {};
+		void printFronts();
+
+		//Inherited from FitterInterface
+		virtual FitterResults runFitter(ModelTuningParameters * resolution);
+
+	private:
+
+};
+
+#endif
+
+
+
